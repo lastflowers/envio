@@ -1,0 +1,32 @@
+# viode yaml file
+
+cam0:
+  T_cam_imu:
+    [0,   1,   0,   0,
+     0,   0,   1,   0,
+     1,   0,   0,   0,
+     0,   0,   0,   1]
+  camera_model: pinhole
+  distortion_coeffs: [0, 0, 0, 0]
+  distortion_model: radtan
+  intrinsics: [376, 376, 376, 240]
+  resolution: [752, 480]
+  timeshift_cam_imu: 0.0
+cam1:
+  T_cam_imu:
+    [0,   1,   0,  -0.05,
+     0,   0,   1,   0,
+     1,   0,   0,   0,
+     0,   0,   0,   1]
+  T_cn_cnm1:
+    [1,   0,   0,  -0.05, 
+     0,   1,   0,   0,
+     0,   0,   1,   0, 
+     0,   0,   0,   1]
+  camera_model: pinhole
+  distortion_coeffs: [0, 0, 0, 0]
+  distortion_model: radtan
+  intrinsics: [376, 376, 376, 240]
+  resolution: [752, 480]
+  timeshift_cam_imu: 0.0
+

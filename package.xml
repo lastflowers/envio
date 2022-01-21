@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ensemble_vio</name>
+  <version>0.1.0</version>
+  <description>The ensemble_vio package</description>
+
+  <maintainer email="lastflowers@snu.ac.kr">Jae Hyung Jung</maintainer>
+
+
+  <!-- One license tag required, multiple allowed, one license per tag -->
+  <!-- Commonly used license strings: -->
+  <!--   BSD, MIT, Boost Software License, GPLv2, GPLv3, LGPLv2.1, LGPLv3 -->
+  <license>GPLv3</license>
+
+  <depend>roscpp</depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>genmsg</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf</depend>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+
+  <!-- The export tag contains other, unspecified, tags -->
+  <export>
+    <!-- Other tools can request additional information be placed here -->
+
+  </export>
+</package>

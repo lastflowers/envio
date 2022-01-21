@@ -1,0 +1,55 @@
+<launch>
+    <!--For the back-end -->
+    <arg name="calibration_file" default="$(find ensemble_vio)/config/viode/camchain-imucam-viode.yaml"/>
+
+    <node pkg="ensemble_vio" type="envio_node" name="envio_node">
+
+        <rosparam command="load" file="$(arg calibration_file)" />
+
+        <!-- Remapping : put your topics -->
+        <remap from="/imu" to="/imu0"/>
+        <remap from="/left_image" to="/cam0/image_raw"/>
+        <remap from="/right_image" to="/cam1/image_raw"/>
+
+        <!-- Vision processing parameters -->
+        <param name="nx" value="25" type="int"/>
+        <param name="ny" value="15" type="int"/>
+        <param name="min_depth" value="0.3" type="double"/>
+        <param name="max_depth" value="30" type="double"/>
+        <param name="min_parallax" value="1" type="double"/>
+        <param name="ransac_thr" value="1" type="double"/>
+
+        <!-- Initial std_dev [rad, m, m/s, m/s^2, rad/s] -->
+        <param name="P0/attitude" value="0.0175" type="double"/>
+        <param name="P0/position" value="3e-2" type="double"/>
+        <param name="P0/velocity" value="3e-2" type="double"/>
+        <param name="P0/ba" value="0.1962" type="double"/>
+        <param name="P0/bg" value="8.7e-3" type="double"/>
+        <param name="P0/depth" value="0.5" type="double"/>
+        <param name="P0/idepth" value="0.1" type="double"/>
+        <param name="num_init_samples" value="200" type="int"/>
+
+        <!-- Process noises [rad/s^(1/2), m/s^(3/2), m/s^(5/2), rad/s^(3/2)]-->
+        <param name="Q/velocity" value="2.3e-3" type="double"/>
+        <param name="Q/atttiude" value="2.3562e-4" type="double"/>
+        <param name="Q/ba" value="2.4525e-4" type="double"/>
+        <param name="Q/bg" value="7.0298e-6" type="double"/>
+
+        <!-- Estimator parameters -->
+        <param name="inverse_depth" value="true" type="bool"/>
+        <param name="R_std" value="16" type="double"/>
+        <param name="max_lifetime" value="60" type="int"/>
+        <param name="thr_stop" value="1e-3" type="double"/>
+        <param name="max_diff" value="40" type="double"/>
+        <param name="N_en" value="100" type="int"/>
+        <param name="use_stochastic_gradient" value="true" type="bool"/>
+        <param name="thr_weak" value="3" type="double"/>
+
+        <!-- Sparse setting -->
+        <param name="thr_num" value="300" type="int"/>
+        <param name="uniform_dist" value="15" type="int"/>
+        <param name="max_iter" value="10" type="int"/>
+
+    </node>
+
+</launch>
