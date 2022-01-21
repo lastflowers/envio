@@ -6,7 +6,9 @@
 
 This is a ROS package of Ensemble Visual-Inertial Odometry (EnVIO) written in C++. It features a photometric (*direct*) measurement model and stochastic linearization that are implemented by iterated extended Kalman filter fully built on the matrix Lie group. EnVIO takes time-synced stereo images and IMU readings as input and outputs the current vehicle pose and feature depths at the current camera frame with their estimated uncertainties.
 
-<iframe width="1280" height="720" src="https://www.youtube.com/embed/dv1tnvR3kVs" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+[![Video Label](http://img.youtube.com/vi/dv1tnvR3kVs/0.jpg)](https://www.youtube.com/watch?v=dv1tnvR3kVs&t=0s)
 
 
 
