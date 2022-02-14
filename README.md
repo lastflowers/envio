@@ -1,6 +1,6 @@
 # Ensemble Visual-Inertial Odometry (EnVIO)
 
-**Authors : [Jae Hyung Jung](https://sites.google.com/view/lastflowers), Yeongkwon Choe, and Chan Gook Park**
+**Authors : [Jae Hyung Jung](https://sites.google.com/view/lastflowers), [Yeongkwon Choe](https://scholar.google.com/citations?user=_3F7tWgAAAAJ&hl=en&oi=sra), and Chan Gook Park**
 
 ### 1. Overview
 
@@ -12,7 +12,7 @@ This is a ROS package of Ensemble Visual-Inertial Odometry (EnVIO) written in C+
 
 ### 2. Build
 
-* This package was tested on **Ubuntu 16.04 (ROS Kinetic)** with **Eigen 3.3.7** for matrix computation and **OpenCV 3.3.1** for image processing in **C++11**.
+* This package was tested on **Ubuntu 16.04 (ROS Kinetic)** with **Eigen 3.3.7** for matrix computation and **OpenCV 3.3.1-dev** for image processing in **C++11**.
 * There are no additional dependencies, we hope this package can be built without any difficulties in different environments.
 * We use the catkin build system :
 
