@@ -299,7 +299,7 @@ void sl_iekf::filterUpdate(const cv::Mat& uimg_l,
             << "   loop time: " << loop_iter_time << std::endl;
 
         if ((fabs(cost_i - cost_prev)/cost_i < thr_stop_)
-            || (iter == max_iter_ - 1) || loop_iter_time > 0.02) {
+            || (iter == max_iter_ - 1) || loop_iter_time > max_itime_) {
             // bias update
             ba_ = ba_p - delx.block<3,1>(9,0);
             bg_ = bg_p - delx.block<3,1>(12,0);
@@ -780,6 +780,7 @@ void sl_iekf::LoadParameters(ros::NodeHandle &n) {
     n.param<int>("/envio_node/max_lifetime", max_lifetime_, 60);
     n.param<int>("/envio_node/uniform_dist", uniform_dist_, 15);
     n.param<int>("/envio_node/max_iter", max_iter_, 1);
+    n.param<double>("/envio_node/max_itime", max_itime_, 0.02);
     n.param<double>("/envio_node/thr_stop", thr_stop_, 1e-3);
     n.param<double>("/envio_node/max_diff", max_diff_, 100);
     n.param<double>("/envio_node/max_depth", max_depth, 20);
@@ -822,6 +823,7 @@ void sl_iekf::LoadParameters(ros::NodeHandle &n) {
     ROS_INFO("Estimator parameters.max_lifetime: %d", max_lifetime_);
     ROS_INFO("Estimator parameters.uniform_dist: %d", uniform_dist_);
     ROS_INFO("Estimator parameters.max_iter: %d", max_iter_);
+    ROS_INFO("Estimator parameters.max_itime: %f", max_itime_);
     ROS_INFO("Estimator parameters.thr_stop: %f", thr_stop_);
     ROS_INFO("Estimator parameters.max_diff: %f", max_diff_);
     ROS_INFO("Estimator parameters.max_depth: %f", max_depth);
@@ -864,7 +866,7 @@ void sl_iekf::LoadParameters(ros::NodeHandle &n) {
     Tlb_.block<3,1>(0,3) = T_cam_imu.translation();
     Tbl_ = Tlb_.inverse();
 
-    draw_max_depth_ = 0.5 * max_depth;
+    draw_max_depth_ = 0.8 * max_depth;
 
     // Set initial mask
     std::vector<int> resolution;

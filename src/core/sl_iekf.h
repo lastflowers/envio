@@ -150,6 +150,8 @@ class sl_iekf {
 
     int max_iter_;  // max iter num of iterated ekf
 
+    double max_itime_;  // max time for early break
+
     double thr_stop_;  // stop threshold for iterated ekf
 
     int max_lifetime_;
