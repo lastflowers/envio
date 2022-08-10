@@ -120,7 +120,7 @@ class sl_iekf {
         V2d uv_r_;  // Pixel coordinate on right
         double depth_l_;  // depth on left
         double depth_r_;  // depth on right
-        double intensity_;  // intensity
+        std::vector<double> intensity_; // pyramidal intensities
 
         V3d pg_f_;  // global feature position
     };
@@ -162,6 +162,8 @@ class sl_iekf {
 
     double draw_max_depth_;
 
+    int max_lvl_ = 2;  // maximum number of pyramid level
+
     cv::Mat mask_;
 
     // Previous left image for tracking quality check
@@ -199,12 +201,12 @@ class sl_iekf {
     void marginalizeEnsemble(const std::vector<int>& marg_idx,
         Eigen::MatrixXd& Z_en);
 
-    void trackFeatures(const cv::Mat& uimg_l,
+    void trackFeatures(std::vector<cv::Mat> pyr_uimg,
         const M3d& Kl, const M3d& Kl_inv, const M3d& Kr, const M4d& T_rl);
 
     void stateReplacement();
 
-    void initializeFeatures(const cv::Mat& uimg_l,
+    void initializeFeatures(std::vector<cv::Mat> pyr_uimg,
         const std::vector<cv::Point2d>& u_l,
         const std::vector<double>& d_l,
         const std::vector<cv::Point2d>& u_r,
@@ -222,8 +224,8 @@ class sl_iekf {
 
     void updateMask(const cv::Mat& uimg_l);
 
-    void filterUpdate(const cv::Mat& uimg_l,
-        const M3d& Kl, const M3d& Kl_inv);
+    void filterUpdate(std::vector<cv::Mat> pyr_uimg,
+        const M3d& Kl);
 
     void Exp_sed3(const V9d& xi, M5d& X);
 

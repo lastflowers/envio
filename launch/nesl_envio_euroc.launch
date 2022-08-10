@@ -24,7 +24,7 @@
         <param name="P0/position" value="3e-2" type="double"/>
         <param name="P0/velocity" value="1e-1" type="double"/>
         <param name="P0/ba" value="0.1962" type="double"/>
-        <param name="P0/bg" value="2e-3" type="double"/>
+        <param name="P0/bg" value="5e-4" type="double"/>
         <param name="P0/depth" value="1.5" type="double"/>
         <param name="P0/idepth" value="0.1" type="double"/>
         <param name="num_init_samples" value="600" type="int"/>
@@ -38,17 +38,19 @@
         <!-- Estimator parameters -->
         <param name="inverse_depth" value="false" type="bool"/>
         <param name="R_std" value="12" type="double"/>
-        <param name="max_lifetime" value="200" type="int"/>
-        <param name="thr_stop" value="1e-3" type="double"/>
+        <param name="max_lifetime" value="2000" type="int"/>
+        <param name="thr_stop" value="1e-5" type="double"/>
+        <param name="max_itime" value="0.03" type="double"/>
         <param name="max_diff" value="40" type="double"/>
         <param name="N_en" value="100" type="int"/>
         <param name="use_stochastic_gradient" value="true" type="bool"/>
         <param name="thr_weak" value="3" type="double"/>
 
         <!-- Sparse setting -->
-        <param name="thr_num" value="200" type="int"/>
-        <param name="uniform_dist" value="15" type="int"/>
-        <param name="max_iter" value="10" type="int"/>
+        <param name="thr_num" value="100" type="int"/>
+        <param name="uniform_dist" value="30" type="int"/>
+        <!-- Number of maximum iteration per image pyramid (2) -->
+        <param name="max_iter" value="4" type="int"/>
 
     </node>
 

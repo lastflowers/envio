@@ -32,20 +32,38 @@ sl_iekf::sl_iekf() {
 }
 
 void sl_iekf::processMeasurement(const nesl::vision_meas& vis_meas) {
-    // Filter update
-    const cv::Mat& uimg_l = vis_meas.uimg_l();
+    // Build pyramidal images
+    std::vector<cv::Mat> pyr_uimg;
+    int w_img = vis_meas.uimg_l().cols;
+    int h_img = vis_meas.uimg_l().rows;
+    for (int yy = 0; yy < max_lvl_; yy++) {
+        // resize in the order of 0.5
+        double dfactor = pow(2,-yy);
+        int wimg_y = static_cast<int>(w_img * dfactor);
+        int himg_y = static_cast<int>(h_img * dfactor);
+
+        if (yy == 0) {
+            pyr_uimg.push_back(vis_meas.uimg_l());
+        }
+        else {
+            cv::Mat img_y;
+            cv::resize(vis_meas.uimg_l(), img_y, cv::Size(wimg_y, himg_y),
+                0, 0, CV_INTER_LINEAR);
+            pyr_uimg.push_back(img_y);
+        }
+    }
 
     // implement filter update
     ros::Time start_time = ros::Time::now();
     if (photo_map_.size() > 0) {
-        filterUpdate(uimg_l, vis_meas.Kl(), vis_meas.Kl_inv());
+        filterUpdate(pyr_uimg, vis_meas.Kl());
     }
     double filter_update_time = (ros::Time::now()-start_time).toSec();
 
 
     // Track features with posterior
     start_time = ros::Time::now();
-    trackFeatures(uimg_l, vis_meas.Kl(), vis_meas.Kl_inv(),
+    trackFeatures(pyr_uimg, vis_meas.Kl(), vis_meas.Kl_inv(),
         vis_meas.Kr(), vis_meas.T_rl());
     double tracking_time = (ros::Time::now()-start_time).toSec();
     
@@ -58,17 +76,17 @@ void sl_iekf::processMeasurement(const nesl::vision_meas& vis_meas) {
 
     // Feature initialization
     start_time = ros::Time::now();
-    initializeFeatures(uimg_l, vis_meas.u_l(), vis_meas.d_l(),
+    initializeFeatures(pyr_uimg, vis_meas.u_l(), vis_meas.d_l(),
         vis_meas.u_r(), vis_meas.d_r(), vis_meas.Kl_inv());
     double initialize_time = (ros::Time::now()-start_time).toSec();
 
 
     // visualize in rviz
     start_time = ros::Time::now();
-    updateMask(uimg_l);
+    updateMask(pyr_uimg[0]);
     double update_mask_time = (ros::Time::now()-start_time).toSec();
 
-    uimg_l_prev_ = uimg_l;
+    uimg_l_prev_ = pyr_uimg[0];
     T0_ = Xi_.block<4,4>(0,0);  // state replacement
 
     std::cout << "update: " << filter_update_time << "   " <<
@@ -79,8 +97,8 @@ void sl_iekf::processMeasurement(const nesl::vision_meas& vis_meas) {
 }
 
 
-void sl_iekf::filterUpdate(const cv::Mat& uimg_l,
-    const M3d& Kl, const M3d& Kl_inv) {
+void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
+    const M3d& Kl) {
     // Set priors
     M5d X_p = Xi_;
     V3d ba_p = ba_;
@@ -110,219 +128,234 @@ void sl_iekf::filterUpdate(const cv::Mat& uimg_l,
         //     (ros::Time::now() - start_time).toSec() << std::endl;
     }
 
+    bool is_break = false;
     ros::Time loop_start_time = ros::Time::now();
-    for (int iter = 0; iter < max_iter_; iter++) {
-        // initialize big matrix
-        int N_d = photo_map_.size();
-        Eigen::MatrixXd H_p = Eigen::MatrixXd::Zero(N_d, Ds);
-        Eigen::VectorXd h_z = Eigen::VectorXd::Zero(N_d);
-        Eigen::VectorXd r = Eigen::VectorXd::Zero(N_d);
+    for (int yy = max_lvl_-1; yy >= 0; yy--) {
+        // Down scale images
+        double dfactor = pow(2,-yy);
+        double dmarg_size = dfactor * marg_size_;
+        cv::Mat uimg_l = pyr_uimg[yy];
+        M3d Ky = dfactor * Kl;
+        Ky(2,2) = 1;
+        M3d Ky_inv = Ky.inverse();
 
-        M4d T_gc0 = T0_ * Tbl_;
-        M3d R_gc0 = T_gc0.block<3,3>(0,0);
-        V3d p_gc0 = T_gc0.block<3,1>(0,3);
-        M4d T_gc1 = Xi_.block<4,4>(0,0) * Tbl_;
-        M4d T_c1g = M4d::Identity();
-        T_c1g.block<3,3>(0,0) = T_gc1.block<3,3>(0,0).transpose();
-        T_c1g.block<3,1>(0,3) = -T_gc1.block<3,3>(0,0).transpose()
-            *T_gc1.block<3,1>(0,3);
-        M3d R_c1g = T_c1g.block<3,3>(0,0);
-        M4d T_c10 = T_c1g * T_gc0;
-        M3d R_c10 = T_c10.block<3,3>(0,0);
-        V3d p_c10 = T_c10.block<3,1>(0,3);
+        for (int iter = 0; iter < max_iter_; iter++) {
+            // initialize big matrix
+            int N_d = photo_map_.size();
+            Eigen::MatrixXd H_p = Eigen::MatrixXd::Zero(N_d, Ds);
+            Eigen::VectorXd h_z = Eigen::VectorXd::Zero(N_d);
+            Eigen::VectorXd r = Eigen::VectorXd::Zero(N_d);
 
-        // sample ensembles
-        std::vector<M4d> T0_en, T1_en;
-        std::vector<Eigen::VectorXd> Z_en;
+            M4d T_gc0 = T0_ * Tbl_;
+            M3d R_gc0 = T_gc0.block<3,3>(0,0);
+            V3d p_gc0 = T_gc0.block<3,1>(0,3);
+            M4d T_gc1 = Xi_.block<4,4>(0,0) * Tbl_;
+            M4d T_c1g = M4d::Identity();
+            T_c1g.block<3,3>(0,0) = T_gc1.block<3,3>(0,0).transpose();
+            T_c1g.block<3,1>(0,3) = -T_gc1.block<3,3>(0,0).transpose()
+                *T_gc1.block<3,1>(0,3);
+            M3d R_c1g = T_c1g.block<3,3>(0,0);
+            M4d T_c10 = T_c1g * T_gc0;
+            M3d R_c10 = T_c10.block<3,3>(0,0);
+            V3d p_c10 = T_c10.block<3,1>(0,3);
 
-        if (use_sl_) {
-            // ros::Time start_time = ros::Time::now();
+            // sample ensembles
+            std::vector<M4d> T0_en, T1_en;
+            std::vector<Eigen::VectorXd> Z_en;
 
-            sampleEnsembles(delta_T0, delta_T1, delta_Z,
-                T0_en, T1_en, Z_en);
+            if (use_sl_) {
+                // ros::Time start_time = ros::Time::now();
 
-            // std::cout << "Ensemble sampling time: " << 
-            //     (ros::Time::now() - start_time).toSec() << std::endl;
-        }
+                sampleEnsembles(delta_T0, delta_T1, delta_Z,
+                    T0_en, T1_en, Z_en);
 
-        std::vector<int> marg_idx;
-        int cnt_stack = 0;
-        int cnt_sl = 0;
+                // std::cout << "Ensemble sampling time: " << 
+                //     (ros::Time::now() - start_time).toSec() << std::endl;
+            }
 
-        // Compute Jacobian per tracking features
-        for (int j = 0; j < N_d; j++) {
-            // warp features
-            V3d uv0_h(photo_map_[j].uv_l_(0,0), photo_map_[j].uv_l_(1,0), 1);
-            V3d uv0_n = Kl_inv*uv0_h;
-            V3d pc0_f = photo_map_[j].depth_l_ * uv0_n;
-            V3d pg_f = R_gc0 * pc0_f + p_gc0;
-            V3d pc1_f = R_c10 * pc0_f + p_c10;
-            double X1 = pc1_f(0,0);
-            double Y1 = pc1_f(1,0);
-            double Z1 = pc1_f(2,0);
-            double inv_Z1 = 1/Z1;
-            V3d uv1_n = pc1_f / Z1;
-            V3d uv1_h = Kl * uv1_n;
+            std::vector<int> marg_idx;
+            int cnt_stack = 0;
+            int cnt_sl = 0;
 
-            if ( (uv1_h(0,0) > marg_size_) &&
-                 (uv1_h(0,0) < uimg_l.cols - marg_size_) &&
-                 (uv1_h(1,0) > marg_size_) &&
-                 (uv1_h(1,0) < uimg_l.rows - marg_size_) && 
-                 (Z1 > 0) ) {
+            // Compute Jacobian per tracking features
+            for (int j = 0; j < N_d; j++) {
+                // warp features
+                V3d uv0_h(dfactor*photo_map_[j].uv_l_(0,0),
+                    dfactor*photo_map_[j].uv_l_(1,0), 1);
+                V3d uv0_n = Ky_inv*uv0_h;
+                V3d pc0_f = photo_map_[j].depth_l_ * uv0_n;
+                V3d pg_f = R_gc0 * pc0_f + p_gc0;
+                V3d pc1_f = R_c10 * pc0_f + p_c10;
+                double X1 = pc1_f(0,0);
+                double Y1 = pc1_f(1,0);
+                double Z1 = pc1_f(2,0);
+                double inv_Z1 = 1/Z1;
+                V3d uv1_n = pc1_f / Z1;
+                V3d uv1_h = Ky * uv1_n;
 
-                // Compute measurement Jacobian
-                double dIx = 0.5 * Kl(0,0) * 
-                (utils::GetPixelValue(uimg_l, uv1_h(0,0)+1, uv1_h(1,0)) -
-                    utils::GetPixelValue(uimg_l, uv1_h(0,0)-1, uv1_h(1,0)));
+                if ( (uv1_h(0,0) > dmarg_size) &&
+                    (uv1_h(0,0) < uimg_l.cols - dmarg_size) &&
+                    (uv1_h(1,0) > dmarg_size) &&
+                    (uv1_h(1,0) < uimg_l.rows - dmarg_size) && 
+                    (Z1 > 0) ) {
 
-                double dIy = 0.5 * Kl(1,1) * 
-                (utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)+1) -
-                    utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)-1));
+                    // Compute measurement Jacobian
+                    double dIx = 0.5 * Ky(0,0) * 
+                    (utils::GetPixelValue(uimg_l, uv1_h(0,0)+1, uv1_h(1,0)) -
+                        utils::GetPixelValue(uimg_l, uv1_h(0,0)-1, uv1_h(1,0)));
 
-                // Compute stochastic gradient
-                if (use_sl_) {
-                    double sl_x = 0.0;
-                    double sl_y = 0.0;
-                    bool is_sl = false;
-                    bool x_weak = fabs(dIx) < Kl(0,0)*thr_weak_;
-                    bool y_weak = fabs(dIy) < Kl(1,1)*thr_weak_;
+                    double dIy = 0.5 * Ky(1,1) * 
+                    (utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)+1) -
+                        utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)-1));
 
-                    if (x_weak || y_weak) {
-                        computeStochasticGradient(uimg_l, Kl, Kl_inv,
-                            uv0_h, uv1_h, T0_en, T1_en, Z_en, j, sl_x, sl_y);
-    
-                        is_sl = true;
+                    // Compute stochastic gradient
+                    if (use_sl_) {
+                        double sl_x = 0.0;
+                        double sl_y = 0.0;
+                        bool is_sl = false;
+                        bool x_weak = fabs(dIx) < Ky(0,0)*thr_weak_;
+                        bool y_weak = fabs(dIy) < Ky(1,1)*thr_weak_;
+
+                        if (x_weak || y_weak) {
+                            computeStochasticGradient(uimg_l, Ky, Ky_inv,
+                                uv0_h, uv1_h, T0_en, T1_en, Z_en, j, sl_x, sl_y);
+        
+                            is_sl = true;
+                        }
+
+                        // Replace small gradients
+                        if (x_weak) dIx = Ky(0,0) * sl_x;
+
+                        if (y_weak) dIy = Ky(1,1) * sl_y;
+
+                        if (is_sl) cnt_sl ++;
                     }
 
-                    // Replace small gradients
-                    if (x_weak) dIx = Kl(0,0) * sl_x;
+                    Eigen::Matrix<double, 1, 3> dI_dp;
+                    dI_dp << dIx*inv_Z1, dIy*inv_Z1,
+                        -(dIx*X1)*(inv_Z1*inv_Z1) - (dIy*Y1)*(inv_Z1*inv_Z1);
+                    
+                    Eigen::Matrix<double, 1, 6> dI_dT1;
+                    dI_dT1 << -dI_dp*R_c1g*nesl::Vec2SkewMat(pg_f),
+                            dI_dp*R_c1g;
 
-                    if (y_weak) dIy = Kl(1,1) * sl_y;
+                    V3d dp_drho;
+                    if (is_idepth_) {
+                        dp_drho = -pc0_f(2,0) * (R_c10*pc0_f);
+                    }
+                    else {
+                        dp_drho = R_c10 * uv0_n;
+                    }
+                    double dI_dz = dI_dp * dp_drho;
 
-                    if (is_sl) cnt_sl ++;
-                }
+                    H_p.block<1,6>(cnt_stack,0) = dI_dT1;
+                    h_z(cnt_stack,0) = dI_dz;
 
-                Eigen::Matrix<double, 1, 3> dI_dp;
-                dI_dp << dIx*inv_Z1, dIy*inv_Z1,
-                    -(dIx*X1)*(inv_Z1*inv_Z1) - (dIy*Y1)*(inv_Z1*inv_Z1);
-                
-                Eigen::Matrix<double, 1, 6> dI_dT1;
-                dI_dT1 << -dI_dp*R_c1g*nesl::Vec2SkewMat(pg_f),
-                        dI_dp*R_c1g;
+                    // Compute innovation
+                    r(cnt_stack,0) = photo_map_[j].intensity_[yy] -
+                        utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0));
 
-                V3d dp_drho;
-                if (is_idepth_) {
-                    dp_drho = -pc0_f(2,0) * (R_c10*pc0_f);
-                }
-                else {
-                    dp_drho = R_c10 * uv0_n;
-                }
-                double dI_dz = dI_dp * dp_drho;
-
-                H_p.block<1,6>(cnt_stack,0) = dI_dT1;
-                h_z(cnt_stack,0) = dI_dz;
-
-                // Compute innovation
-                r(cnt_stack,0) = photo_map_[j].intensity_ -
-                    utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0));
-
-                cnt_stack ++;
-            }
-            else {
-                marg_idx.push_back(j);
-            }
-        }
-        // Resize Jacobian matrices
-        H_p.conservativeResize(cnt_stack, H_p.cols());
-        h_z.conservativeResize(cnt_stack);
-        r.conservativeResize(cnt_stack);
-
-        // Marginalize invalid features
-        if (marg_idx.size() > 0) {
-            std::cout << "In estimator, throw " << marg_idx.size() 
-                << " features" << std::endl;
-
-            marginalizeFromIndex(marg_idx);
-        }
-        // Decompose dynamic part
-        Eigen::MatrixXd P_pz = cov_.block(0,21,6,cnt_stack);
-        Eigen::MatrixXd P_vz = cov_.block(6,21,9,cnt_stack);
-        Eigen::MatrixXd P_tz = cov_.block(15,21,6,cnt_stack);
-        Eigen::MatrixXd P_z = cov_.block(21,21,cnt_stack,cnt_stack);
-
-        Eigen::MatrixXd H_p_T = H_p.transpose();
-        Eigen::MatrixXd PH_T_p(Ds, cnt_stack);
-        Eigen::MatrixXd PH_T_v(9, cnt_stack);
-        Eigen::MatrixXd PH_T_t(Ds, cnt_stack);
-        Eigen::MatrixXd PH_T_z(cnt_stack, cnt_stack);
-        Eigen::MatrixXd PH_T(Dx+Ds+cnt_stack, cnt_stack);
-
-        PH_T_p = (P_p - P_pt)*H_p_T + P_pz*(h_z.asDiagonal());
-        PH_T_v = (P_vp - P_vt)*H_p_T + P_vz*(h_z.asDiagonal());
-        PH_T_t = (P_pt.transpose() - P_t)*H_p_T + P_tz*(h_z.asDiagonal());
-        PH_T_z = (P_pz - P_tz).transpose()*H_p_T + P_z*(h_z.asDiagonal()); 
-        PH_T << PH_T_p, PH_T_v, PH_T_t, PH_T_z;
-
-        Eigen::MatrixXd HPH_T(cnt_stack, cnt_stack);
-        HPH_T = H_p*PH_T_p - H_p*PH_T_t + h_z.asDiagonal()*PH_T_z;
-
-        Eigen::MatrixXd S(cnt_stack, cnt_stack);
-        S = HPH_T;
-        for (int i = 0; i < S.cols(); i ++) S(i,i) = S(i,i) + R_;
-        
-        Eigen::MatrixXd HP = PH_T.transpose();
-        Eigen::MatrixXd K_T = S.llt().solve(HP);
-        Eigen::MatrixXd K = K_T.transpose();
- 
-        delx = K * r;
-
-        // State update
-        M5d del_X;
-        Exp_sed3(-delx.block<9,1>(0,0), del_X);
-        M5d Xi_new = del_X * X_p;
-        Xi_ = Xi_new;
-
-        M4d del_T;
-        Exp_se3(-delx.block<6,1>(15,0), del_T);
-        M4d T0_new = del_T * T_p;
-        T0_ = T0_new;
-
-        // Report iteration
-        // Check processing time
-        double loop_iter_time =
-            (ros::Time::now() - loop_start_time).toSec();
-
-        double cost_i = 1.5379e-5*(r.dot(r));
-        std::cout << "[" << iter << " iter]" 
-            << " # features: " << cnt_stack << " (" << cnt_sl << ")" 
-            << " / " << N_d << "  cost: " << cost_i 
-            << "   loop time: " << loop_iter_time << std::endl;
-
-        if ((fabs(cost_i - cost_prev)/cost_i < thr_stop_)
-            || (iter == max_iter_ - 1) || loop_iter_time > max_itime_) {
-            // bias update
-            ba_ = ba_p - delx.block<3,1>(9,0);
-            bg_ = bg_p - delx.block<3,1>(12,0);
-
-            // map update (only in the last iter)
-            for (int j = 0; j < cnt_stack; j ++) {
-                if (is_idepth_) {
-                    double idepth_new = 1/photo_map_[j].depth_l_ + delx(Dx+Ds+j, 0);
-                    photo_map_[j].depth_l_ = 1/idepth_new;
+                    cnt_stack ++;
                 }
                 else {
-                    photo_map_[j].depth_l_ += delx(Dx+Ds+j, 0);
+                    marg_idx.push_back(j);
                 }
             }
+            // Resize Jacobian matrices
+            H_p.conservativeResize(cnt_stack, H_p.cols());
+            h_z.conservativeResize(cnt_stack);
+            r.conservativeResize(cnt_stack);
 
-            // Covariance update (only in the last iter)
-            Eigen::MatrixXd cov_new = cov_ - K*HP;
-            validateCovMtx(cov_new, cov_);
+            // Marginalize invalid features
+            if (marg_idx.size() > 0) {
+                std::cout << "In estimator, throw " << marg_idx.size() 
+                    << " features" << std::endl;
 
-            break;
-        }
-        cost_prev = cost_i;
-    }
+                marginalizeFromIndex(marg_idx);
+            }
+            // Decompose dynamic part
+            Eigen::MatrixXd P_pz = cov_.block(0,21,6,cnt_stack);
+            Eigen::MatrixXd P_vz = cov_.block(6,21,9,cnt_stack);
+            Eigen::MatrixXd P_tz = cov_.block(15,21,6,cnt_stack);
+            Eigen::MatrixXd P_z = cov_.block(21,21,cnt_stack,cnt_stack);
+
+            Eigen::MatrixXd H_p_T = H_p.transpose();
+            Eigen::MatrixXd PH_T_p(Ds, cnt_stack);
+            Eigen::MatrixXd PH_T_v(9, cnt_stack);
+            Eigen::MatrixXd PH_T_t(Ds, cnt_stack);
+            Eigen::MatrixXd PH_T_z(cnt_stack, cnt_stack);
+            Eigen::MatrixXd PH_T(Dx+Ds+cnt_stack, cnt_stack);
+
+            PH_T_p = (P_p - P_pt)*H_p_T + P_pz*(h_z.asDiagonal());
+            PH_T_v = (P_vp - P_vt)*H_p_T + P_vz*(h_z.asDiagonal());
+            PH_T_t = (P_pt.transpose() - P_t)*H_p_T + P_tz*(h_z.asDiagonal());
+            PH_T_z = (P_pz - P_tz).transpose()*H_p_T + P_z*(h_z.asDiagonal()); 
+            PH_T << PH_T_p, PH_T_v, PH_T_t, PH_T_z;
+
+            Eigen::MatrixXd HPH_T(cnt_stack, cnt_stack);
+            HPH_T = H_p*PH_T_p - H_p*PH_T_t + h_z.asDiagonal()*PH_T_z;
+
+            Eigen::MatrixXd S(cnt_stack, cnt_stack);
+            S = HPH_T;
+            for (int i = 0; i < S.cols(); i ++) S(i,i) = S(i,i) + R_;
+            
+            Eigen::MatrixXd HP = PH_T.transpose();
+            Eigen::MatrixXd K_T = S.llt().solve(HP);
+            Eigen::MatrixXd K = K_T.transpose();
+    
+            delx = K * r;
+
+            // State update
+            M5d del_X;
+            Exp_sed3(-delx.block<9,1>(0,0), del_X);
+            M5d Xi_new = del_X * X_p;
+            Xi_ = Xi_new;
+
+            M4d del_T;
+            Exp_se3(-delx.block<6,1>(15,0), del_T);
+            M4d T0_new = del_T * T_p;
+            T0_ = T0_new;
+
+            // Report iteration
+            // Check processing time
+            double loop_iter_time =
+                (ros::Time::now() - loop_start_time).toSec();
+
+            double cost_i = 1.5379e-5*(r.dot(r));
+            std::cout << "[" << yy+1 << "-" << iter+1 << " iter]"
+                << " # features: " << cnt_stack << " (" << cnt_sl << ")" 
+                << " / " << N_d << "  cost: " << cost_i 
+                << "   loop time: " << loop_iter_time << std::endl;
+
+            if ((fabs(cost_i - cost_prev)/cost_i < thr_stop_) ||
+                (yy == 0 && iter == max_iter_-1) || 
+                loop_iter_time > max_itime_) {
+                // bias update
+                ba_ = ba_p - delx.block<3,1>(9,0);
+                bg_ = bg_p - delx.block<3,1>(12,0);
+
+                // map update (only in the last iter)
+                for (int j = 0; j < cnt_stack; j ++) {
+                    if (is_idepth_) {
+                        double idepth_new = 1/photo_map_[j].depth_l_ + delx(Dx+Ds+j, 0);
+                        photo_map_[j].depth_l_ = 1/idepth_new;
+                    }
+                    else {
+                        photo_map_[j].depth_l_ += delx(Dx+Ds+j, 0);
+                    }
+                }
+
+                // Covariance update (only in the last iter)
+                Eigen::MatrixXd cov_new = cov_ - K*HP;
+                validateCovMtx(cov_new, cov_);
+
+                is_break = true;
+                break;
+            }
+            cost_prev = cost_i;
+        } // iter loop
+        if (is_break) break;
+    } // pyramid level loop
 }
 
 
@@ -374,7 +407,7 @@ void sl_iekf::updateMask(const cv::Mat& uimg_l) {
 
 
 
-void sl_iekf::initializeFeatures(const cv::Mat& uimg_l,
+void sl_iekf::initializeFeatures(std::vector<cv::Mat> pyr_uimg,
     const std::vector<cv::Point2d>& u_l,
     const std::vector<double>& d_l,
     const std::vector<cv::Point2d>& u_r,
@@ -401,7 +434,12 @@ void sl_iekf::initializeFeatures(const cv::Mat& uimg_l,
             feature_i.uv_r_ << u_r[i].x, u_r[i].y;
             feature_i.depth_l_ = d_l[i];
             feature_i.depth_r_ = d_r[i];
-            feature_i.intensity_ = utils::GetPixelValue(uimg_l, u_l[i].x, u_l[i].y);
+            for (int yy = 0; yy < max_lvl_; yy++) {
+                double dfactor = pow(2,-yy);
+                feature_i.intensity_.push_back(
+                    utils::GetPixelValue(pyr_uimg[yy],
+                        dfactor*u_l[i].x, dfactor*u_l[i].y));
+            }
             feature_i.pg_f_ = pg_f;
             photo_map_.push_back(feature_i);
         }
@@ -441,7 +479,7 @@ void sl_iekf::stateReplacement() {
 }
 
 
-void sl_iekf::trackFeatures(const cv::Mat& uimg_l,
+void sl_iekf::trackFeatures(std::vector<cv::Mat> pyr_uimg,
     const M3d& Kl, const M3d& Kl_inv,
     const M3d& Kr, const M4d& T_rl) {
 
@@ -467,7 +505,7 @@ void sl_iekf::trackFeatures(const cv::Mat& uimg_l,
         V3d uv1_n = pc1_f / Z1;
         V3d uv1_h = Kl * uv1_n;
         double intensity_new =
-            utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0));
+            utils::GetPixelValue(pyr_uimg[0], uv1_h(0,0), uv1_h(1,0));
 
         // Check patch neiborgood to erase occluded features
         // Note that NCC quality check is very important in practical sense
@@ -482,7 +520,7 @@ void sl_iekf::trackFeatures(const cv::Mat& uimg_l,
             for (int y = -patch_size; y<= patch_size; y++) {
 
                 I0(cnt, 0) = utils::GetPixelValue(uimg_l_prev_, uv0_h(0,0)+x, uv0_h(1,0)+y);;
-                I1(cnt, 0) = utils::GetPixelValue(uimg_l, uv1_h(0,0)+x, uv1_h(1,0)+y);
+                I1(cnt, 0) = utils::GetPixelValue(pyr_uimg[0], uv1_h(0,0)+x, uv1_h(1,0)+y);
                 I0_mean += I0(cnt,0);
                 I1_mean += I1(cnt,0);
 
@@ -507,11 +545,11 @@ void sl_iekf::trackFeatures(const cv::Mat& uimg_l,
             + T_gc1.block<3,1>(0,3);
 
         if ( (uv1_h(0,0) > marg_size_) &&
-            (uv1_h(0,0) < uimg_l.cols - marg_size_) &&
+            (uv1_h(0,0) < pyr_uimg[0].cols - marg_size_) &&
             (uv1_h(1,0) > marg_size_) &&
-            (uv1_h(1,0) < uimg_l.rows - marg_size_) && 
+            (uv1_h(1,0) < pyr_uimg[0].rows - marg_size_) && 
             (Z1 > 0) && (photo_map_[j].life_time_ < max_lifetime_) &&
-            (abs(intensity_new - photo_map_[j].intensity_) < max_diff_) &&
+            (abs(intensity_new - photo_map_[j].intensity_[0]) < max_diff_) &&
             (ncc_j > 0.80)) {
 
             // project on right camera
@@ -523,7 +561,13 @@ void sl_iekf::trackFeatures(const cv::Mat& uimg_l,
 
             photo_map_[j].depth_l_ = Z1;
             photo_map_[j].depth_r_ = Zr1;
-            photo_map_[j].intensity_ = intensity_new;
+            photo_map_[j].intensity_.clear();
+            for (int yy = 0; yy < max_lvl_; yy++) {
+                double dfactor = pow(2,-yy);
+                photo_map_[j].intensity_.push_back(
+                    utils::GetPixelValue(pyr_uimg[yy],
+                        dfactor*uv1_h(0,0), dfactor*uv1_h(1,0)));
+            }
             photo_map_[j].life_time_ += 1;
             photo_map_[j].uv_l_ = uv1_h.head<2>();
             photo_map_[j].uv_r_ = uv_r1_h.head<2>();
@@ -915,6 +959,7 @@ void sl_iekf::registerPub(ros::NodeHandle &n) {
 }
 
 void sl_iekf::publishPoseAndMap(const std_msgs::Header& header,
+    const cv::Mat& uimg_l, const cv::Mat& uimg_r) {
     // Odometry and image publish was copied from the implementation 
     // by T. Qin, P. Li, Z. Yang, and S. Shen in VINS-Mono (estimator_node.cpp)
     // https://github.com/HKUST-Aerial-Robotics/VINS-Mono
@@ -924,7 +969,6 @@ void sl_iekf::publishPoseAndMap(const std_msgs::Header& header,
     // in OpenVINS (ov_msckf/src/core/RosVisualizer.cpp)
     // https://github.com/rpng/open_vins
 
-    const cv::Mat& uimg_l, const cv::Mat& uimg_r) {
     // publish tf (imu pose)
     static tf::TransformBroadcaster tf_pub;
     geometry_msgs::TransformStamped odom_trans;
