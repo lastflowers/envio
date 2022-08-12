@@ -29,6 +29,32 @@ sl_iekf::sl_iekf() {
     unsigned int seed =
         std::chrono::steady_clock::now().time_since_epoch().count();
     generator_.seed(seed);
+
+    // Must be odd size
+    // 1) No pattern
+    // pad_ = MatrixXi::Zero(1,2); 
+    // pad_ << 0, 0;
+
+    // 2) 
+    pad_ = MatrixXi::Zero(5,2); 
+    pad_ << -1, -1,
+             1, -1,
+             0,  0,
+            -1,  1,
+             1,  1;
+
+    // 3)
+    // pad_ = MatrixXi::Zero(9,2); 
+    // pad_ <<  0, -2,
+    //         -1, -1,
+    //          1, -1,
+    //         -2,  0,
+    //          0,  0,
+    //          2,  0,
+    //         -1,  1,
+    //          1,  1,
+    //          0,  2;
+    idx_center_ = static_cast<int>(floor(0.5*pad_.rows()));
 }
 
 void sl_iekf::processMeasurement(const nesl::vision_meas& vis_meas) {
@@ -99,6 +125,10 @@ void sl_iekf::processMeasurement(const nesl::vision_meas& vis_meas) {
 
 void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
     const M3d& Kl) {
+    // compute inverse of cov
+    Eigen::MatrixXd Pinv = cov_.llt().solve(
+        Eigen::MatrixXd::Identity(cov_.cols(), cov_.cols()));
+
     // Set priors
     M5d X_p = Xi_;
     V3d ba_p = ba_;
@@ -106,15 +136,6 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
     M4d T_p = T0_;
     double cost_prev = 1e+4;
     Eigen::VectorXd delx;
-
-    // Decompose static part
-    M6d P_p = cov_.block<6,6>(0,0);
-    M9d P_v = cov_.block<9,9>(6,6);
-    M6d P_t = cov_.block<6,6>(15,15);
-    Eigen::Matrix<double, 6, 9> P_pv = cov_.block<6,9>(0,6);
-    Eigen::Matrix<double, 9, 6> P_vp = cov_.block<9,6>(6,0);
-    M6d P_pt = cov_.block<6,6>(0,15);
-    Eigen::Matrix<double, 9, 6> P_vt = cov_.block<9,6>(6, 15);
 
     // Sample delta ensembles
     std::vector<V6d> delta_T0, delta_T1;
@@ -142,9 +163,11 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
         for (int iter = 0; iter < max_iter_; iter++) {
             // initialize big matrix
             int N_d = photo_map_.size();
-            Eigen::MatrixXd H_p = Eigen::MatrixXd::Zero(N_d, Ds);
-            Eigen::VectorXd h_z = Eigen::VectorXd::Zero(N_d);
-            Eigen::VectorXd r = Eigen::VectorXd::Zero(N_d);
+            int N = cov_.cols();
+            M6d HpT_Hp = M6d::Zero();
+            Eigen::MatrixXd HpT_h = Eigen::MatrixXd::Zero(6,N_d);
+            Eigen::VectorXd hT_h = Eigen::VectorXd::Zero(N_d,1);
+            Eigen::VectorXd HT_Rinv_r = Eigen::VectorXd::Zero(N,1);
 
             M4d T_gc0 = T0_ * Tbl_;
             M3d R_gc0 = T_gc0.block<3,3>(0,0);
@@ -174,97 +197,140 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
             }
 
             std::vector<int> marg_idx;
+            double cost_accum = 0;
             int cnt_stack = 0;
+            int cnt_pixel = 0;
             int cnt_sl = 0;
 
             // Compute Jacobian per tracking features
             for (int j = 0; j < N_d; j++) {
-                // warp features
-                V3d uv0_h(dfactor*photo_map_[j].uv_l_(0,0),
-                    dfactor*photo_map_[j].uv_l_(1,0), 1);
-                V3d uv0_n = Ky_inv*uv0_h;
-                V3d pc0_f = photo_map_[j].depth_l_ * uv0_n;
-                V3d pg_f = R_gc0 * pc0_f + p_gc0;
-                V3d pc1_f = R_c10 * pc0_f + p_c10;
-                double X1 = pc1_f(0,0);
-                double Y1 = pc1_f(1,0);
-                double Z1 = pc1_f(2,0);
-                double inv_Z1 = 1/Z1;
-                V3d uv1_n = pc1_f / Z1;
-                V3d uv1_h = Ky * uv1_n;
+                // Initialize accumulators
+                M6d HpT_Hp_j = M6d::Zero();
+                V6d HpT_h_j = V6d::Zero();
+                double hT_h_j = 0;
+                V6d HT_Rinv_rp_j = V6d::Zero();
+                V6d HT_Rinv_rs_j = V6d::Zero();
+                double HT_Rinv_rd_j = 0;
+                bool is_fov = true;
 
-                if ( (uv1_h(0,0) > dmarg_size) &&
-                    (uv1_h(0,0) < uimg_l.cols - dmarg_size) &&
-                    (uv1_h(1,0) > dmarg_size) &&
-                    (uv1_h(1,0) < uimg_l.rows - dmarg_size) && 
-                    (Z1 > 0) ) {
+                // iter per pattern
+                for (int l = 0; l < pad_.rows(); l++) {
+                    V3d uv0_h(dfactor*photo_map_[j].uv_l_(0,0)+pad_(l,0),
+                        dfactor*photo_map_[j].uv_l_(1,0)+pad_(l,1), 1);
+                    
+                    // warp features
+                    V3d uv0_n = Ky_inv*uv0_h;
+                    V3d pc0_f = photo_map_[j].depth_l_ * uv0_n;
+                    V3d pg_f = R_gc0 * pc0_f + p_gc0;
+                    V3d pc1_f = R_c10 * pc0_f + p_c10;
+                    double X1 = pc1_f(0,0);
+                    double Y1 = pc1_f(1,0);
+                    double Z1 = pc1_f(2,0);
+                    double inv_Z1 = 1/Z1;
+                    V3d uv1_n = pc1_f / Z1;
+                    V3d uv1_h = Ky * uv1_n;
 
-                    // Compute measurement Jacobian
-                    double dIx = 0.5 * Ky(0,0) * 
-                    (utils::GetPixelValue(uimg_l, uv1_h(0,0)+1, uv1_h(1,0)) -
-                        utils::GetPixelValue(uimg_l, uv1_h(0,0)-1, uv1_h(1,0)));
+                    if ( (uv1_h(0,0) > dmarg_size) &&
+                        (uv1_h(0,0) < uimg_l.cols - dmarg_size) &&
+                        (uv1_h(1,0) > dmarg_size) &&
+                        (uv1_h(1,0) < uimg_l.rows - dmarg_size) && 
+                        (Z1 > 0) ) {
 
-                    double dIy = 0.5 * Ky(1,1) * 
-                    (utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)+1) -
-                        utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)-1));
+                        // Compute measurement Jacobian
+                        double dIx = 0.5 * Ky(0,0) * 
+                        (utils::GetPixelValue(uimg_l, uv1_h(0,0)+1, uv1_h(1,0)) -
+                            utils::GetPixelValue(uimg_l, uv1_h(0,0)-1, uv1_h(1,0)));
 
-                    // Compute stochastic gradient
-                    if (use_sl_) {
-                        double sl_x = 0.0;
-                        double sl_y = 0.0;
-                        bool is_sl = false;
-                        bool x_weak = fabs(dIx) < Ky(0,0)*thr_weak_;
-                        bool y_weak = fabs(dIy) < Ky(1,1)*thr_weak_;
+                        double dIy = 0.5 * Ky(1,1) * 
+                        (utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)+1) -
+                            utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0)-1));
 
-                        if (x_weak || y_weak) {
-                            computeStochasticGradient(uimg_l, Ky, Ky_inv,
-                                uv0_h, uv1_h, T0_en, T1_en, Z_en, j, sl_x, sl_y);
-        
-                            is_sl = true;
+                        // Compute stochastic gradient
+                        if (use_sl_) {
+                            double sl_x = 0.0;
+                            double sl_y = 0.0;
+                            bool is_sl = false;
+                            bool x_weak = fabs(dIx) < Ky(0,0)*thr_weak_;
+                            bool y_weak = fabs(dIy) < Ky(1,1)*thr_weak_;
+
+                            if (x_weak || y_weak) {
+                                computeStochasticGradient(uimg_l, Ky, Ky_inv,
+                                    uv0_h, uv1_h, T0_en, T1_en, Z_en, j, sl_x, sl_y);
+            
+                                is_sl = true;
+                            }
+
+                            // Replace small gradients
+                            if (x_weak) dIx = Ky(0,0) * sl_x;
+
+                            if (y_weak) dIy = Ky(1,1) * sl_y;
+
+                            if (is_sl) cnt_sl ++;
                         }
 
-                        // Replace small gradients
-                        if (x_weak) dIx = Ky(0,0) * sl_x;
+                        Eigen::Matrix<double, 1, 3> dI_dp;
+                        dI_dp << dIx*inv_Z1, dIy*inv_Z1,
+                            -(dIx*X1)*(inv_Z1*inv_Z1) - (dIy*Y1)*(inv_Z1*inv_Z1);
+                        
+                        Eigen::Matrix<double, 1, 6> Hp_jl;
+                        Hp_jl << -dI_dp*R_c1g*nesl::Vec2SkewMat(pg_f),
+                                dI_dp*R_c1g;
 
-                        if (y_weak) dIy = Ky(1,1) * sl_y;
+                        V3d dp_drho;
+                        if (is_idepth_) {
+                            dp_drho = -pc0_f(2,0) * (R_c10*pc0_f);
+                        }
+                        else {
+                            dp_drho = R_c10 * uv0_n;
+                        }
+                        double h_jl = dI_dp * dp_drho;
 
-                        if (is_sl) cnt_sl ++;
-                    }
+                        // Compute innovation
+                        double r_jl = photo_map_[j].intensity_[yy][l] -
+                            utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0));
+                        cost_accum += r_jl * r_jl;
+                        r_jl /= R_;
 
-                    Eigen::Matrix<double, 1, 3> dI_dp;
-                    dI_dp << dIx*inv_Z1, dIy*inv_Z1,
-                        -(dIx*X1)*(inv_Z1*inv_Z1) - (dIy*Y1)*(inv_Z1*inv_Z1);
-                    
-                    Eigen::Matrix<double, 1, 6> dI_dT1;
-                    dI_dT1 << -dI_dp*R_c1g*nesl::Vec2SkewMat(pg_f),
-                            dI_dp*R_c1g;
+                        // Accumlate
+                        HpT_Hp_j += (Hp_jl.transpose() * Hp_jl) / R_;
+                        HpT_h_j += (Hp_jl.transpose() * h_jl) / R_;
+                        hT_h_j += (h_jl * h_jl) / R_;
 
-                    V3d dp_drho;
-                    if (is_idepth_) {
-                        dp_drho = -pc0_f(2,0) * (R_c10*pc0_f);
+                        HT_Rinv_rp_j += Hp_jl.transpose() * r_jl;
+                        HT_Rinv_rd_j += h_jl * r_jl;
+
+                        cnt_pixel ++;
                     }
                     else {
-                        dp_drho = R_c10 * uv0_n;
+                        is_fov = false;
+                        break;
                     }
-                    double dI_dz = dI_dp * dp_drho;
+                } // end for pattern
 
-                    H_p.block<1,6>(cnt_stack,0) = dI_dT1;
-                    h_z(cnt_stack,0) = dI_dz;
+                if (is_fov) {
+                    HpT_Hp += HpT_Hp_j;
+                    HpT_h.block<6,1>(0,cnt_stack) = HpT_h_j;
+                    hT_h(cnt_stack,0) = hT_h_j;
 
-                    // Compute innovation
-                    r(cnt_stack,0) = photo_map_[j].intensity_[yy] -
-                        utils::GetPixelValue(uimg_l, uv1_h(0,0), uv1_h(1,0));
+                    V6d tmp = HT_Rinv_r.block<6,1>(0,0);
+                    HT_Rinv_r.block<6,1>(0,0) = tmp + HT_Rinv_rp_j;
+
+                    tmp = HT_Rinv_r.block<6,1>(Dx,0);
+                    HT_Rinv_r.block<6,1>(Dx,0) = tmp - HT_Rinv_rp_j;
+
+                    HT_Rinv_r(Ds+Dx+cnt_stack,0) = HT_Rinv_rd_j;
 
                     cnt_stack ++;
-                }
+                } 
                 else {
                     marg_idx.push_back(j);
                 }
-            }
+            } // end for feature
+
             // Resize Jacobian matrices
-            H_p.conservativeResize(cnt_stack, H_p.cols());
-            h_z.conservativeResize(cnt_stack);
-            r.conservativeResize(cnt_stack);
+            HpT_h.conservativeResize(Ds, cnt_stack);
+            hT_h.conservativeResize(cnt_stack);
+            HT_Rinv_r.conservativeResize(Dx+Ds+cnt_stack);
 
             // Marginalize invalid features
             if (marg_idx.size() > 0) {
@@ -272,38 +338,26 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
                     << " features" << std::endl;
 
                 marginalizeFromIndex(marg_idx);
+
+                // reassign inverse of cov
+                Pinv = cov_.llt().solve(
+                    Eigen::MatrixXd::Identity(cov_.cols(), cov_.cols()));
             }
-            // Decompose dynamic part
-            Eigen::MatrixXd P_pz = cov_.block(0,21,6,cnt_stack);
-            Eigen::MatrixXd P_vz = cov_.block(6,21,9,cnt_stack);
-            Eigen::MatrixXd P_tz = cov_.block(15,21,6,cnt_stack);
-            Eigen::MatrixXd P_z = cov_.block(21,21,cnt_stack,cnt_stack);
 
-            Eigen::MatrixXd H_p_T = H_p.transpose();
-            Eigen::MatrixXd PH_T_p(Ds, cnt_stack);
-            Eigen::MatrixXd PH_T_v(9, cnt_stack);
-            Eigen::MatrixXd PH_T_t(Ds, cnt_stack);
-            Eigen::MatrixXd PH_T_z(cnt_stack, cnt_stack);
-            Eigen::MatrixXd PH_T(Dx+Ds+cnt_stack, cnt_stack);
+            // Compute updated covariance
+            Eigen::MatrixXd cov_inv = Pinv;
+            cov_inv.block<6,6>(0,0) = Pinv.block<6,6>(0,0) + HpT_Hp;
+            cov_inv.block<6,6>(Dx,Dx) = Pinv.block<6,6>(Dx,Dx) + HpT_Hp;
+            cov_inv.block<6,6>(0,Dx) = Pinv.block<6,6>(0,Dx) - HpT_Hp;
+            cov_inv.block<6,6>(Dx,0) = Pinv.block<6,6>(Dx,0) - HpT_Hp;
 
-            PH_T_p = (P_p - P_pt)*H_p_T + P_pz*(h_z.asDiagonal());
-            PH_T_v = (P_vp - P_vt)*H_p_T + P_vz*(h_z.asDiagonal());
-            PH_T_t = (P_pt.transpose() - P_t)*H_p_T + P_tz*(h_z.asDiagonal());
-            PH_T_z = (P_pz - P_tz).transpose()*H_p_T + P_z*(h_z.asDiagonal()); 
-            PH_T << PH_T_p, PH_T_v, PH_T_t, PH_T_z;
+            cov_inv.block(0,Ds+Dx,Ds,cnt_stack) = Pinv.block(0,Ds+Dx,Ds,cnt_stack) + HpT_h;
+            cov_inv.block(Dx,Ds+Dx,Ds,cnt_stack) = Pinv.block(Dx,Ds+Dx,Ds,cnt_stack) - HpT_h;
+            cov_inv.block(Ds+Dx,0,cnt_stack,Ds) = Pinv.block(Ds+Dx,0,cnt_stack,Ds) + HpT_h.transpose();
+            cov_inv.block(Dx+Ds,Dx,cnt_stack,Ds) = Pinv.block(Ds+Dx,Dx,cnt_stack,Ds) - HpT_h.transpose();
 
-            Eigen::MatrixXd HPH_T(cnt_stack, cnt_stack);
-            HPH_T = H_p*PH_T_p - H_p*PH_T_t + h_z.asDiagonal()*PH_T_z;
-
-            Eigen::MatrixXd S(cnt_stack, cnt_stack);
-            S = HPH_T;
-            for (int i = 0; i < S.cols(); i ++) S(i,i) = S(i,i) + R_;
-            
-            Eigen::MatrixXd HP = PH_T.transpose();
-            Eigen::MatrixXd K_T = S.llt().solve(HP);
-            Eigen::MatrixXd K = K_T.transpose();
-    
-            delx = K * r;
+            for (int i = 0; i < cnt_stack; i++) cov_inv(Ds+Dx+i,Ds+Dx+i) = Pinv(Ds+Dx+i,Ds+Dx+i) + hT_h(i,0);
+            delx = cov_inv.llt().solve(HT_Rinv_r);
 
             // State update
             M5d del_X;
@@ -321,11 +375,12 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
             double loop_iter_time =
                 (ros::Time::now() - loop_start_time).toSec();
 
-            double cost_i = 1.5379e-5*(r.dot(r));
+            double cost_i = 1.5379e-5*cost_accum;
             std::cout << "[" << yy+1 << "-" << iter+1 << " iter]"
-                << " # features: " << cnt_stack << " (" << cnt_sl << ")" 
-                << " / " << N_d << "  cost: " << cost_i 
-                << "   loop time: " << loop_iter_time << std::endl;
+                << " # features: " << cnt_stack << " / " << N_d 
+                << "  SL: " << cnt_sl << " / " << cnt_pixel 
+                << "  cost: " << cost_i 
+                << "  loop time: " << loop_iter_time << std::endl;
 
             if ((fabs(cost_i - cost_prev)/cost_i < thr_stop_) ||
                 (yy == 0 && iter == max_iter_-1) || 
@@ -345,8 +400,9 @@ void sl_iekf::filterUpdate(std::vector<cv::Mat> pyr_uimg,
                     }
                 }
 
-                // Covariance update (only in the last iter)
-                Eigen::MatrixXd cov_new = cov_ - K*HP;
+                // Covariance assignment (only in the last iter)
+                Eigen::MatrixXd cov_new = cov_inv.llt().solve(
+                    Eigen::MatrixXd::Identity(cov_inv.cols(), cov_inv.cols()));
                 validateCovMtx(cov_new, cov_);
 
                 is_break = true;
@@ -436,9 +492,13 @@ void sl_iekf::initializeFeatures(std::vector<cv::Mat> pyr_uimg,
             feature_i.depth_r_ = d_r[i];
             for (int yy = 0; yy < max_lvl_; yy++) {
                 double dfactor = pow(2,-yy);
-                feature_i.intensity_.push_back(
-                    utils::GetPixelValue(pyr_uimg[yy],
-                        dfactor*u_l[i].x, dfactor*u_l[i].y));
+                
+                std::vector<double> intensity_patch;
+                for (int l = 0; l < pad_.rows(); l++) {
+                    intensity_patch.push_back(utils::GetPixelValue(pyr_uimg[yy],
+                        dfactor*u_l[i].x+pad_(l,0), dfactor*u_l[i].y+pad_(l,1)));
+                }
+                feature_i.intensity_.push_back(intensity_patch);
             }
             feature_i.pg_f_ = pg_f;
             photo_map_.push_back(feature_i);
@@ -549,7 +609,7 @@ void sl_iekf::trackFeatures(std::vector<cv::Mat> pyr_uimg,
             (uv1_h(1,0) > marg_size_) &&
             (uv1_h(1,0) < pyr_uimg[0].rows - marg_size_) && 
             (Z1 > 0) && (photo_map_[j].life_time_ < max_lifetime_) &&
-            (abs(intensity_new - photo_map_[j].intensity_[0]) < max_diff_) &&
+            (abs(intensity_new - photo_map_[j].intensity_[0][idx_center_]) < max_diff_) &&
             (ncc_j > 0.80)) {
 
             // project on right camera
@@ -561,12 +621,17 @@ void sl_iekf::trackFeatures(std::vector<cv::Mat> pyr_uimg,
 
             photo_map_[j].depth_l_ = Z1;
             photo_map_[j].depth_r_ = Zr1;
+
             photo_map_[j].intensity_.clear();
             for (int yy = 0; yy < max_lvl_; yy++) {
                 double dfactor = pow(2,-yy);
-                photo_map_[j].intensity_.push_back(
-                    utils::GetPixelValue(pyr_uimg[yy],
-                        dfactor*uv1_h(0,0), dfactor*uv1_h(1,0)));
+
+                std::vector<double> intensity_patch;
+                for (int l = 0; l < pad_.rows(); l++) {
+                    intensity_patch.push_back(utils::GetPixelValue(pyr_uimg[yy],
+                        dfactor*uv1_h(0,0)+pad_(l,0), dfactor*uv1_h(1,0)+pad_(l,1)));
+                }
+                photo_map_[j].intensity_.push_back(intensity_patch); 
             }
             photo_map_[j].life_time_ += 1;
             photo_map_[j].uv_l_ = uv1_h.head<2>();

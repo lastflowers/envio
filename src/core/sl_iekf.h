@@ -120,7 +120,7 @@ class sl_iekf {
         V2d uv_r_;  // Pixel coordinate on right
         double depth_l_;  // depth on left
         double depth_r_;  // depth on right
-        std::vector<double> intensity_; // pyramidal intensities
+        std::vector<std::vector<double>> intensity_; // pyramidal intensities
 
         V3d pg_f_;  // global feature position
     };
@@ -162,7 +162,11 @@ class sl_iekf {
 
     double draw_max_depth_;
 
-    int max_lvl_ = 2;  // maximum number of pyramid level
+    int max_lvl_ = 3;  // maximum number of pyramid level
+
+    // Pattern padding
+    Eigen::MatrixXi pad_;
+    int idx_center_;
 
     cv::Mat mask_;
 

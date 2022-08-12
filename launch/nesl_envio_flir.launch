@@ -37,20 +37,20 @@
 
         <!-- Estimator parameters -->
         <param name="inverse_depth" value="false" type="bool"/>
-        <param name="R_std" value="20" type="double"/>
-        <param name="max_lifetime" value="3000" type="int"/>
+        <param name="R_std" value="24" type="double"/>
+        <param name="max_lifetime" value="200" type="int"/>
         <param name="thr_stop" value="1e-5" type="double"/>
         <param name="max_itime" value="0.03" type="double"/>
-        <param name="max_diff" value="40" type="double"/>
-        <param name="N_en" value="100" type="int"/>
+        <param name="max_diff" value="30" type="double"/>
+        <param name="N_en" value="50" type="int"/>
         <param name="use_stochastic_gradient" value="true" type="bool"/>
-        <param name="thr_weak" value="3" type="double"/>
+        <param name="thr_weak" value="0.1" type="double"/>
 
         <!-- Sparse setting -->
-        <param name="thr_num" value="100" type="int"/>
-        <param name="uniform_dist" value="50" type="int"/>
+        <param name="thr_num" value="150" type="int"/>
+        <param name="uniform_dist" value="20" type="int"/>
         <!-- Number of maximum iteration per image pyramid (2) -->
-        <param name="max_iter" value="4" type="int"/>
+        <param name="max_iter" value="3" type="int"/>
 
     </node>
 

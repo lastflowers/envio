@@ -41,14 +41,14 @@
         <param name="max_lifetime" value="60" type="int"/>
         <param name="thr_stop" value="1e-3" type="double"/>
         <param name="max_diff" value="40" type="double"/>
-        <param name="N_en" value="100" type="int"/>
+        <param name="N_en" value="50" type="int"/>
         <param name="use_stochastic_gradient" value="true" type="bool"/>
-        <param name="thr_weak" value="3" type="double"/>
+        <param name="thr_weak" value="0.1" type="double"/>
 
         <!-- Sparse setting -->
-        <param name="thr_num" value="300" type="int"/>
+        <param name="thr_num" value="200" type="int"/>
         <param name="uniform_dist" value="15" type="int"/>
-        <param name="max_iter" value="10" type="int"/>
+        <param name="max_iter" value="3" type="int"/>
 
     </node>
 
