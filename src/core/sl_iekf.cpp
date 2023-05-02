@@ -725,7 +725,7 @@ void sl_iekf::marginalizeFromIndex(
         }
         if (is_valid) {
             cov_marg.block(0, cnt_c, cov_marg.rows(), 1) =
-                cov_r_marg.block(0, c, cov_r_marg.cols(), 1);
+                cov_r_marg.block(0, c, cov_r_marg.rows(), 1);
             cnt_c ++;
         }
     }

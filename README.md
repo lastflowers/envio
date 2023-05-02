@@ -1,6 +1,6 @@
 # Ensemble Visual-Inertial Odometry (EnVIO)
 
-**Authors : [Jae Hyung Jung](https://sites.google.com/view/lastflowers), [Yeongkwon Choe](https://scholar.google.com/citations?user=_3F7tWgAAAAJ&hl=en&oi=sra), and Chan Gook Park**
+**Authors : [Jae Hyung Jung](https://sites.google.com/view/lastflowers), [Yeongkwon Choe](https://scholar.google.com/citations?user=_3F7tWgAAAAJ&hl=en&oi=sra), and [Chan Gook Park](https://scholar.google.com/citations?user=9gwkQ7AAAAAJ&hl=en)**
 
 ### 1. Overview
 
